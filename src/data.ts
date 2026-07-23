@@ -11,7 +11,7 @@ export const initialResources: Resource[] = [
     location: "Ruta a San Gabriel",
     assignment: "Evaluación y traslado preventivo",
     quantity: 1,
-    updatedAt: "14:45",
+    updatedAt: new Date().toISOString()
   },
   {
     id: "2",
@@ -23,7 +23,7 @@ export const initialResources: Resource[] = [
     location: "Sector Baños Morales",
     assignment: "Reconocimiento de ruta",
     quantity: 1,
-    updatedAt: "14:46",
+    updatedAt: new Date().toISOString()
   },
   {
     id: "3",
@@ -35,7 +35,7 @@ export const initialResources: Resource[] = [
     location: "Puesto de comando",
     assignment: "Comunicaciones operativas",
     quantity: 1,
-    updatedAt: "14:20",
+    updatedAt: new Date().toISOString()
   },
   {
     id: "4",
@@ -47,13 +47,39 @@ export const initialResources: Resource[] = [
     location: "PSR San Gabriel",
     assignment: "Respaldo eléctrico",
     quantity: 1,
-    updatedAt: "14:32",
-  },
+    updatedAt: new Date().toISOString()
+  }
 ];
 
+function todayAt(hour: number, minute: number) {
+  const date = new Date();
+  date.setHours(hour, minute, 0, 0);
+  return date.toISOString();
+}
+
 export const initialLog: LogEntry[] = [
-  { id: "1", time: "14:05", description: "Se activa UGRED por evento de aluvión en San Gabriel." },
-  { id: "2", time: "14:12", description: "Contacto establecido con equipo de la PSR San Gabriel." },
-  { id: "3", time: "14:20", description: "Se despacha camioneta UGRED hacia el sector afectado." },
-  { id: "4", time: "14:31", description: "Ruta G-25 interrumpida en km 42 por arrastre de material." },
+  {
+    id: "1",
+    createdAt: todayAt(14, 5),
+    description:
+      "Se activa UGRED por evento de aluvión en San Gabriel."
+  },
+  {
+    id: "2",
+    createdAt: todayAt(14, 12),
+    description:
+      "Contacto establecido con equipo de la PSR San Gabriel."
+  },
+  {
+    id: "3",
+    createdAt: todayAt(14, 20),
+    description:
+      "Se despacha camioneta UGRED hacia el sector afectado."
+  },
+  {
+    id: "4",
+    createdAt: todayAt(14, 31),
+    description:
+      "Ruta G-25 interrumpida en km 42 por arrastre de material."
+  }
 ];
