@@ -1,7 +1,7 @@
 {
   "name": "tablero-incidentes-ugred",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -18,7 +18,7 @@
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
-    "typescript": "~5.6.3",
+    "typescript": "^5.6.3",
     "vite": "^6.0.7"
   }
 }
