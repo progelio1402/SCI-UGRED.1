@@ -1,1203 +1,256 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
-  AlertTriangle,
-  BookOpenText,
-  Check,
-  ClipboardList,
-  Database,
-  Edit3,
-  FileText,
-  Plus,
-  Save,
-  ShieldCheck,
-  Trash2,
-  Truck,
-  X
+  Activity, AlertTriangle, Ambulance, BarChart3, BookOpenText, CheckCircle2,
+  Clock3, Database, FileText, HeartPulse, LayoutDashboard, Plus, Radio,
+  ShieldAlert, Trash2, Truck, UserRound, UsersRound, X
 } from "lucide-react";
-
 import type {
-  Incident,
-  LogEntry,
-  Resource,
-  ResourceStatus,
-  Task
+  AppData, Patient, PatientCondition, Resource, ResourceStatus, ResourceType,
+  Task, TimelineEntry
 } from "./types";
+import { loadLocal, saveLocal } from "./storage";
+import { loadRemote, saveRemote, supabaseConfigured } from "./supabase";
 
-import { loadLocal, saveLocal, type AppData } from "./storage";
-import {
-  loadRemote,
-  saveRemote,
-  supabaseConfigured
-} from "./supabase";
+const resourceStatuses: ResourceStatus[] = ["Disponible", "Asignado", "En tránsito", "En operación", "Fuera de servicio", "Liberado"];
+const patientConditions: PatientCondition[] = ["Evaluado", "En observación", "Traslado", "Hospitalizado", "Alta en terreno", "Fallecido"];
 
-const resourceStatuses: ResourceStatus[] = [
-  "Disponible",
-  "Asignado",
-  "En tránsito",
-  "En operación",
-  "Fuera de servicio",
-  "Liberado"
-];
+type Tab = "dashboard" | "incidente" | "recursos" | "pacientes" | "timeline" | "reporte";
 
-function nowText() {
-  return new Date().toLocaleString("es-CL", {
-    dateStyle: "short",
-    timeStyle: "short"
-  });
+function slug(value: string) {
+  return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "-");
+}
+
+function elapsedLabel(startedAt: string, now: Date) {
+  const start = new Date(startedAt).getTime();
+  if (!Number.isFinite(start)) return "Sin hora de inicio";
+  const minutes = Math.max(0, Math.floor((now.getTime() - start) / 60000));
+  const hours = Math.floor(minutes / 60);
+  const remaining = minutes % 60;
+  return hours > 0 ? `${hours} h ${remaining} min` : `${remaining} min`;
 }
 
 function App() {
   const initial = loadLocal();
-
-  const [incident, setIncident] = useState<Incident>(initial.incident);
-  const [resources, setResources] = useState<Resource[]>(initial.resources);
-  const [tasks, setTasks] = useState<Task[]>(initial.tasks);
-  const [log, setLog] = useState<LogEntry[]>(initial.log);
-
-  const [tab, setTab] = useState<
-    "tablero" | "recursos" | "bitacora" | "reporte"
-  >("tablero");
-
-  const [editingIncident, setEditingIncident] = useState(false);
+  const [data, setData] = useState<AppData>(initial);
+  const [tab, setTab] = useState<Tab>("dashboard");
+  const [now, setNow] = useState(new Date());
+  const [sync, setSync] = useState("Guardado localmente");
   const [resourceModal, setResourceModal] = useState(false);
+  const [patientModal, setPatientModal] = useState(false);
   const [taskModal, setTaskModal] = useState(false);
-  const [logText, setLogText] = useState("");
-  const [syncState, setSyncState] = useState("Guardado localmente");
+  const [timelineModal, setTimelineModal] = useState(false);
 
-  const data: AppData = useMemo(
-    () => ({
-      incident,
-      resources,
-      tasks,
-      log
-    }),
-    [incident, resources, tasks, log]
-  );
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!supabaseConfigured) return;
+    loadRemote().then(remote => {
+      if (remote) {
+        setData(remote);
+        setSync("Datos cargados desde Supabase");
+      }
+    }).catch(() => setSync("Usando almacenamiento local"));
+  }, []);
 
   useEffect(() => {
     saveLocal(data);
-    setSyncState("Guardado localmente");
-
-    const timeout = window.setTimeout(async () => {
+    const timer = window.setTimeout(async () => {
       if (!supabaseConfigured) {
-        setSyncState("Guardado localmente");
+        setSync("Guardado localmente");
         return;
       }
-
       try {
         await saveRemote(data);
-        setSyncState("Sincronizado con Supabase");
+        setSync("Sincronizado con Supabase");
       } catch {
-        setSyncState("Guardado local; Supabase no disponible");
+        setSync("Guardado local; error de sincronización");
       }
-    }, 600);
-
-    return () => window.clearTimeout(timeout);
+    }, 700);
+    return () => window.clearTimeout(timer);
   }, [data]);
 
-  useEffect(() => {
-    if (!supabaseConfigured) {
-      setSyncState("Supabase no configurado");
-      return;
-    }
+  const summary = useMemo(() => {
+    const activeResources = data.resources.filter(r => ["Asignado", "En tránsito", "En operación"].includes(r.status)).length;
+    const availableResources = data.resources.filter(r => r.status === "Disponible").length;
+    const transfers = data.patients.filter(p => ["Traslado", "Hospitalizado"].includes(p.condition)).length;
+    const deceased = data.patients.filter(p => p.condition === "Fallecido").length;
+    const openTasks = data.tasks.filter(t => t.status !== "Cumplida").length;
+    return { activeResources, availableResources, transfers, deceased, openTasks };
+  }, [data]);
 
-    loadRemote()
-      .then((remote) => {
-        if (!remote) {
-          setSyncState("Sin datos remotos; usando datos locales");
-          return;
-        }
-
-        setIncident(remote.incident);
-        setResources(remote.resources);
-        setTasks(remote.tasks);
-        setLog(remote.log);
-        setSyncState("Datos cargados desde Supabase");
-      })
-      .catch(() => {
-        setSyncState("Usando almacenamiento local");
-      });
-  }, []);
-
-  function addLog(description: string) {
-    setLog((current) => [
+  function addTimeline(description: string, category: TimelineEntry["category"], author: string) {
+    setData(current => ({
       ...current,
-      {
-        id: crypto.randomUUID(),
-        createdAt: new Date().toISOString(),
-        description
-      }
-    ]);
+      timeline: [...current.timeline, { id: crypto.randomUUID(), createdAt: new Date().toISOString(), category, description, author }]
+    }));
   }
 
-  function createNewIncident() {
-    const confirmed = window.confirm(
-      "¿Crear un nuevo incidente? Se reemplazará el incidente actual."
-    );
-
-    if (!confirmed) return;
-
-    const fresh: Incident = {
-      ...incident,
-      id: crypto.randomUUID(),
-      name: "Nuevo incidente",
-      type: "Emergencia comunal",
-      location: "San José de Maipo",
-      detail: "",
-      objective:
-        "Proteger la vida y mantener la continuidad de la red de salud.",
-      situation: "Pendiente de evaluación inicial.",
-      risks: "Sin riesgos registrados.",
-      criticalServices: "Sin afectación informada.",
-      level: "VERDE",
-      status: "Activo",
-      startedAt: new Date().toISOString().slice(0, 16),
-      evaluated: 0,
-      injured: 0,
-      transferred: 0,
-      isolated: 0
-    };
-
-    setIncident(fresh);
-    setTasks([]);
-    setLog([
-      {
-        id: crypto.randomUUID(),
-        createdAt: new Date().toISOString(),
-        description: "Nuevo incidente creado."
-      }
-    ]);
-    setTab("tablero");
+  function changeResourceStatus(resource: Resource, status: ResourceStatus) {
+    setData(current => ({
+      ...current,
+      resources: current.resources.map(item => item.id === resource.id ? { ...item, status, updatedAt: new Date().toISOString() } : item)
+    }));
+    addTimeline(`${resource.code} · ${resource.name} cambia a ${status}.`, "Logística", "Sistema");
   }
 
-  function addResource(form: HTMLFormElement) {
-    const formData = new FormData(form);
-
-    const resource: Resource = {
-      id: crypto.randomUUID(),
-      code: String(formData.get("code") ?? ""),
-      name: String(formData.get("name") ?? ""),
-      type: String(formData.get("type")) as Resource["type"],
-      status: "Disponible",
-      responsible: String(formData.get("responsible") || "Sin asignar"),
-      location: String(formData.get("location") || "Puesto de comando"),
-      assignment: String(formData.get("assignment") || "Sin asignar"),
-      quantity: Number(formData.get("quantity") || 1),
-      updatedAt: new Date().toISOString()
-    };
-
-    setResources((current) => [...current, resource]);
-    addLog(`Recurso ${resource.code} · ${resource.name} incorporado.`);
-    setResourceModal(false);
-  }
-
-  function changeResourceStatus(
-    resource: Resource,
-    status: ResourceStatus
-  ) {
-    setResources((items) =>
-      items.map((item) =>
-        item.id === resource.id
-          ? {
-              ...item,
-              status,
-              updatedAt: new Date().toISOString()
-            }
-          : item
-      )
-    );
-
-    addLog(
-      `${resource.code} cambió de ${resource.status} a ${status}.`
-    );
-  }
-
-  function addTask(form: HTMLFormElement) {
-    const formData = new FormData(form);
-
-    const task: Task = {
-      id: crypto.randomUUID(),
-      objective: String(formData.get("objective") ?? ""),
-      action: String(formData.get("action") ?? ""),
-      responsible: String(formData.get("responsible") ?? ""),
-      priority: String(formData.get("priority")) as Task["priority"],
-      status: "Pendiente",
-      deadline: String(formData.get("deadline") || "")
-    };
-
-    setTasks((current) => [...current, task]);
-    addLog(`Nueva tarea asignada a ${task.responsible}.`);
-    setTaskModal(false);
-  }
-
-  function addManualLog() {
-    const description = logText.trim();
-
-    if (!description) return;
-
-    addLog(description);
-    setLogText("");
-  }
-
-  function printReport() {
-    setTab("reporte");
-    window.setTimeout(() => window.print(), 250);
+  function changePatientCondition(patient: Patient, condition: PatientCondition) {
+    setData(current => ({
+      ...current,
+      patients: current.patients.map(item => item.id === patient.id ? { ...item, condition, updatedAt: new Date().toISOString() } : item)
+    }));
+    addTimeline(`${patient.name} cambia condición a ${condition}.`, "Salud", "Equipo clínico");
   }
 
   return (
-    <div className="app">
-      <header>
+    <div className="app-shell">
+      <header className="topbar">
         <div className="brand">
-          <img
-            className="brand-logo"
-            src="/logo-ugred.jpg"
-            alt="Logo UGRED San José de Maipo"
-          />
-
-          <div>
-            <strong>UGRED · SAN JOSÉ DE MAIPO</strong>
-            <span>
-              Tablero digital de incidentes · Departamento de Salud
-            </span>
-          </div>
+          <img src="/logo-ugred.jpg" alt="Logo UGRED" />
+          <div><strong>SCI · UGRED</strong><span>San José de Maipo · Departamento de Salud</span></div>
         </div>
-
-        <nav>
-          <button
-            type="button"
-            onClick={() => setTab("tablero")}
-            className={tab === "tablero" ? "active" : ""}
-          >
-            Tablero
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setTab("recursos")}
-            className={tab === "recursos" ? "active" : ""}
-          >
-            Recursos
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setTab("bitacora")}
-            className={tab === "bitacora" ? "active" : ""}
-          >
-            Bitácora
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setTab("reporte")}
-            className={tab === "reporte" ? "active" : ""}
-          >
-            Reporte
-          </button>
-        </nav>
-
-        <div className="sync">
-          <Database size={15} />
-          {syncState}
-        </div>
+        <div className="clock"><Clock3 size={18}/><div><strong>{now.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</strong><span>{now.toLocaleDateString("es-CL")}</span></div></div>
+        <div className="sync"><Database size={16}/>{sync}</div>
       </header>
 
-      {tab === "tablero" && (
-        <main>
-          <section className="hero card">
-            <div>
-              <span
-                className={`level level-${incident.level.toLowerCase()}`}
-              >
-                {incident.level}
-              </span>
+      <nav className="main-nav">
+        <NavButton active={tab === "dashboard"} onClick={() => setTab("dashboard")} icon={<LayoutDashboard/>} label="Resumen" />
+        <NavButton active={tab === "incidente"} onClick={() => setTab("incidente")} icon={<ShieldAlert/>} label="Incidente" />
+        <NavButton active={tab === "recursos"} onClick={() => setTab("recursos")} icon={<Truck/>} label="Recursos" />
+        <NavButton active={tab === "pacientes"} onClick={() => setTab("pacientes")} icon={<HeartPulse/>} label="Pacientes" />
+        <NavButton active={tab === "timeline"} onClick={() => setTab("timeline")} icon={<BookOpenText/>} label="Línea de tiempo" />
+        <NavButton active={tab === "reporte"} onClick={() => setTab("reporte")} icon={<FileText/>} label="SITREP" />
+      </nav>
 
-              <h1>{incident.name}</h1>
+      {tab === "dashboard" && <Dashboard data={data} summary={summary} now={now} setTab={setTab} />}
+      {tab === "incidente" && <IncidentPanel data={data} setData={setData} setTaskModal={setTaskModal} />}
+      {tab === "recursos" && <ResourcesPanel data={data} setData={setData} changeStatus={changeResourceStatus} openModal={() => setResourceModal(true)} />}
+      {tab === "pacientes" && <PatientsPanel data={data} setData={setData} changeCondition={changePatientCondition} openModal={() => setPatientModal(true)} />}
+      {tab === "timeline" && <TimelinePanel data={data} openModal={() => setTimelineModal(true)} />}
+      {tab === "reporte" && <ReportPanel data={data} summary={summary} now={now} />}
 
-              <p>
-                {incident.type} · {incident.location}
-              </p>
-            </div>
-
-            <div className="hero-actions">
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => setEditingIncident(true)}
-              >
-                <Edit3 size={17} />
-                Editar incidente
-              </button>
-
-              <button type="button" onClick={createNewIncident}>
-                <Plus size={17} />
-                Nuevo incidente
-              </button>
-            </div>
-          </section>
-
-          <section className="stats">
-            <div className="card">
-              <small>Evaluadas</small>
-              <strong>{incident.evaluated}</strong>
-            </div>
-
-            <div className="card">
-              <small>Lesionados</small>
-              <strong>{incident.injured}</strong>
-            </div>
-
-            <div className="card">
-              <small>Trasladados</small>
-              <strong>{incident.transferred}</strong>
-            </div>
-
-            <div className="card">
-              <small>Aislados</small>
-              <strong>{incident.isolated}</strong>
-            </div>
-          </section>
-
-          <section className="grid2">
-            <article className="card">
-              <h2>
-                <AlertTriangle size={20} />
-                Situación operativa
-              </h2>
-
-              <label>
-                Situación actual
-                <textarea
-                  value={incident.situation}
-                  onChange={(event) =>
-                    setIncident({
-                      ...incident,
-                      situation: event.target.value
-                    })
-                  }
-                />
-              </label>
-
-              <label>
-                Riesgos
-                <textarea
-                  value={incident.risks}
-                  onChange={(event) =>
-                    setIncident({
-                      ...incident,
-                      risks: event.target.value
-                    })
-                  }
-                />
-              </label>
-
-              <label>
-                Servicios críticos
-                <textarea
-                  value={incident.criticalServices}
-                  onChange={(event) =>
-                    setIncident({
-                      ...incident,
-                      criticalServices: event.target.value
-                    })
-                  }
-                />
-              </label>
-            </article>
-
-            <article className="card">
-              <div className="title-row">
-                <h2>
-                  <ClipboardList size={20} />
-                  Plan de acción
-                </h2>
-
-                <button
-                  type="button"
-                  onClick={() => setTaskModal(true)}
-                >
-                  <Plus size={16} />
-                  Tarea
-                </button>
-              </div>
-
-              {tasks.length === 0 ? (
-                <p className="empty">No hay tareas registradas.</p>
-              ) : (
-                <div className="task-list">
-                  {tasks.map((task) => (
-                    <div className="task" key={task.id}>
-                      <div>
-                        <strong>{task.objective}</strong>
-                        <span>{task.action}</span>
-                        <small>
-                          {task.responsible} · {task.priority} ·{" "}
-                          {task.deadline || "Sin plazo"}
-                        </small>
-                      </div>
-
-                      <select
-                        value={task.status}
-                        onChange={(event) => {
-                          const status =
-                            event.target.value as Task["status"];
-
-                          setTasks((current) =>
-                            current.map((item) =>
-                              item.id === task.id
-                                ? {
-                                    ...item,
-                                    status
-                                  }
-                                : item
-                            )
-                          );
-
-                          addLog(
-                            `Tarea “${task.objective}” cambió a ${status}.`
-                          );
-                        }}
-                      >
-                        <option value="Pendiente">Pendiente</option>
-                        <option value="En curso">En curso</option>
-                        <option value="Cumplida">Cumplida</option>
-                      </select>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </article>
-          </section>
-
-          <section className="card">
-            <div className="title-row">
-              <h2>
-                <Truck size={20} />
-                Recursos desplegados
-              </h2>
-
-              <button
-                type="button"
-                onClick={() => setResourceModal(true)}
-              >
-                <Plus size={16} />
-                Agregar
-              </button>
-            </div>
-
-            <div className="resource-grid">
-              {resources.slice(0, 8).map((resource) => (
-                <article className="resource" key={resource.id}>
-                  <div>
-                    <b>{resource.code}</b>
-                    <span>{resource.name}</span>
-                  </div>
-
-                  <small>
-                    {resource.location} · {resource.responsible}
-                  </small>
-
-                  <input
-                    value={resource.assignment}
-                    onChange={(event) =>
-                      setResources((current) =>
-                        current.map((item) =>
-                          item.id === resource.id
-                            ? {
-                                ...item,
-                                assignment: event.target.value,
-                                updatedAt: new Date().toISOString()
-                              }
-                            : item
-                        )
-                      )
-                    }
-                  />
-
-                  <select
-                    value={resource.status}
-                    onChange={(event) =>
-                      changeResourceStatus(
-                        resource,
-                        event.target.value as ResourceStatus
-                      )
-                    }
-                  >
-                    {resourceStatuses.map((status) => (
-                      <option key={status} value={status}>
-                        {status}
-                      </option>
-                    ))}
-                  </select>
-                </article>
-              ))}
-            </div>
-          </section>
-        </main>
-      )}
-
-      {tab === "recursos" && (
-        <main>
-          <section className="card">
-            <div className="title-row">
-              <div>
-                <h1>Catálogo de recursos</h1>
-                <p>Recursos permanentes y eventuales.</p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setResourceModal(true)}
-              >
-                <Plus size={17} />
-                Nuevo recurso
-              </button>
-            </div>
-
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Código</th>
-                    <th>Nombre</th>
-                    <th>Tipo</th>
-                    <th>Cantidad</th>
-                    <th>Responsable</th>
-                    <th>Ubicación</th>
-                    <th>Estado</th>
-                    <th>Acciones</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {resources.map((resource) => (
-                    <tr key={resource.id}>
-                      <td>{resource.code}</td>
-                      <td>{resource.name}</td>
-                      <td>{resource.type}</td>
-                      <td>{resource.quantity}</td>
-                      <td>{resource.responsible}</td>
-                      <td>{resource.location}</td>
-
-                      <td>
-                        <select
-                          value={resource.status}
-                          onChange={(event) =>
-                            changeResourceStatus(
-                              resource,
-                              event.target.value as ResourceStatus
-                            )
-                          }
-                        >
-                          {resourceStatuses.map((status) => (
-                            <option key={status} value={status}>
-                              {status}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-
-                      <td>
-                        <button
-                          type="button"
-                          className="icon danger"
-                          aria-label={`Eliminar ${resource.name}`}
-                          onClick={() => {
-                            const confirmed = window.confirm(
-                              `¿Eliminar el recurso ${resource.code} · ${resource.name}?`
-                            );
-
-                            if (!confirmed) return;
-
-                            setResources((current) =>
-                              current.filter(
-                                (item) => item.id !== resource.id
-                              )
-                            );
-
-                            addLog(
-                              `Recurso ${resource.code} eliminado.`
-                            );
-                          }}
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </main>
-      )}
-
-      {tab === "bitacora" && (
-        <main>
-          <section className="card">
-            <h1>Bitácora del incidente</h1>
-
-            <div className="log-entry">
-              <input
-                value={logText}
-                onChange={(event) => setLogText(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    addManualLog();
-                  }
-                }}
-                placeholder="Escriba un evento operacional…"
-              />
-
-              <button type="button" onClick={addManualLog}>
-                <Plus size={17} />
-                Registrar
-              </button>
-            </div>
-
-            <div className="timeline">
-              {[...log].reverse().map((item) => (
-                <div key={item.id}>
-                  <time>
-                    {new Date(item.createdAt).toLocaleString("es-CL")}
-                  </time>
-                  <p>{item.description}</p>
-                </div>
-              ))}
-            </div>
-          </section>
-        </main>
-      )}
-
-      {tab === "reporte" && (
-        <main className="report">
-          <section className="card">
-            <div className="title-row no-print">
-              <h1>Reporte SITREP</h1>
-
-              <button type="button" onClick={printReport}>
-                <FileText size={17} />
-                Imprimir / Guardar PDF
-              </button>
-            </div>
-
-            <div className="report-head">
-              <ShieldCheck size={42} />
-
-              <div>
-                <h1>SITREP · {incident.name}</h1>
-                <p>Emitido: {nowText()}</p>
-              </div>
-            </div>
-
-            <h2>1. Identificación</h2>
-
-            <dl className="report-grid">
-              <div>
-                <dt>Tipo</dt>
-                <dd>{incident.type}</dd>
-              </div>
-
-              <div>
-                <dt>Ubicación</dt>
-                <dd>{incident.location}</dd>
-              </div>
-
-              <div>
-                <dt>Nivel</dt>
-                <dd>{incident.level}</dd>
-              </div>
-
-              <div>
-                <dt>Comandante</dt>
-                <dd>{incident.commander}</dd>
-              </div>
-
-              <div>
-                <dt>Inicio</dt>
-                <dd>{incident.startedAt.replace("T", " ")}</dd>
-              </div>
-
-              <div>
-                <dt>Estado</dt>
-                <dd>{incident.status}</dd>
-              </div>
-            </dl>
-
-            <h2>2. Situación</h2>
-            <p>{incident.situation}</p>
-
-            <h2>3. Riesgos</h2>
-            <p>{incident.risks}</p>
-
-            <h2>4. Servicios críticos</h2>
-            <p>{incident.criticalServices}</p>
-
-            <h2>5. Objetivo general</h2>
-            <p>{incident.objective}</p>
-
-            <h2>6. Personas afectadas</h2>
-            <p>
-              Evaluadas: {incident.evaluated} · Lesionados:{" "}
-              {incident.injured} · Trasladados:{" "}
-              {incident.transferred} · Aislados: {incident.isolated}
-            </p>
-
-            <h2>7. Recursos desplegados</h2>
-
-            {resources.filter(
-              (resource) =>
-                resource.status !== "Disponible" &&
-                resource.status !== "Liberado"
-            ).length === 0 ? (
-              <p>No hay recursos desplegados registrados.</p>
-            ) : (
-              <ul>
-                {resources
-                  .filter(
-                    (resource) =>
-                      resource.status !== "Disponible" &&
-                      resource.status !== "Liberado"
-                  )
-                  .map((resource) => (
-                    <li key={resource.id}>
-                      {resource.code} · {resource.name} ·{" "}
-                      {resource.status} · {resource.assignment}
-                    </li>
-                  ))}
-              </ul>
-            )}
-
-            <h2>8. Plan de acción</h2>
-
-            {tasks.length === 0 ? (
-              <p>No hay tareas registradas.</p>
-            ) : (
-              <ul>
-                {tasks.map((task) => (
-                  <li key={task.id}>
-                    {task.objective} — {task.responsible} —{" "}
-                    {task.status}
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            <h2>9. Últimos eventos</h2>
-
-            {log.length === 0 ? (
-              <p>No hay eventos registrados.</p>
-            ) : (
-              <ul>
-                {log.slice(-12).map((entry) => (
-                  <li key={entry.id}>
-                    {new Date(entry.createdAt).toLocaleString(
-                      "es-CL"
-                    )}{" "}
-                    — {entry.description}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        </main>
-      )}
-
-      <footer>
-        <button
-          type="button"
-          onClick={() => setTab("bitacora")}
-        >
-          <BookOpenText size={17} />
-          Registrar evento
-        </button>
-
-        <button type="button" onClick={printReport}>
-          <FileText size={17} />
-          Generar SITREP
-        </button>
-
-        <button
-          type="button"
-          className="secondary"
-          onClick={() => {
-            saveLocal(data);
-            setSyncState("Guardado manualmente");
-          }}
-        >
-          <Save size={17} />
-          Guardar
-        </button>
+      <footer className="quickbar">
+        <button onClick={() => setTimelineModal(true)}><BookOpenText size={18}/>Registrar evento</button>
+        <button onClick={() => setPatientModal(true)}><HeartPulse size={18}/>Agregar paciente</button>
+        <button onClick={() => setResourceModal(true)}><Truck size={18}/>Agregar recurso</button>
       </footer>
 
-      {editingIncident && (
-        <Modal
-          title="Editar incidente"
-          onClose={() => setEditingIncident(false)}
-        >
-          <div className="form-grid">
-            <label>
-              Nombre
-              <input
-                value={incident.name}
-                onChange={(event) =>
-                  setIncident({
-                    ...incident,
-                    name: event.target.value
-                  })
-                }
-              />
-            </label>
-
-            <label>
-              Tipo
-              <input
-                value={incident.type}
-                onChange={(event) =>
-                  setIncident({
-                    ...incident,
-                    type: event.target.value
-                  })
-                }
-              />
-            </label>
-
-            <label>
-              Ubicación
-              <input
-                value={incident.location}
-                onChange={(event) =>
-                  setIncident({
-                    ...incident,
-                    location: event.target.value
-                  })
-                }
-              />
-            </label>
-
-            <label>
-              Comandante
-              <input
-                value={incident.commander}
-                onChange={(event) =>
-                  setIncident({
-                    ...incident,
-                    commander: event.target.value
-                  })
-                }
-              />
-            </label>
-
-            <label>
-              Inicio
-              <input
-                type="datetime-local"
-                value={incident.startedAt}
-                onChange={(event) =>
-                  setIncident({
-                    ...incident,
-                    startedAt: event.target.value
-                  })
-                }
-              />
-            </label>
-
-            <label>
-              Nivel
-              <select
-                value={incident.level}
-                onChange={(event) =>
-                  setIncident({
-                    ...incident,
-                    level: event.target.value as Incident["level"]
-                  })
-                }
-              >
-                <option value="VERDE">VERDE</option>
-                <option value="AMARILLO">AMARILLO</option>
-                <option value="ROJO">ROJO</option>
-              </select>
-            </label>
-
-            <label>
-              Estado
-              <select
-                value={incident.status}
-                onChange={(event) =>
-                  setIncident({
-                    ...incident,
-                    status: event.target.value as Incident["status"]
-                  })
-                }
-              >
-                <option value="Activo">Activo</option>
-                <option value="Cerrado">Cerrado</option>
-              </select>
-            </label>
-
-            <label className="wide">
-              Detalle
-              <textarea
-                value={incident.detail}
-                onChange={(event) =>
-                  setIncident({
-                    ...incident,
-                    detail: event.target.value
-                  })
-                }
-              />
-            </label>
-
-            <label className="wide">
-              Objetivo general
-              <textarea
-                value={incident.objective}
-                onChange={(event) =>
-                  setIncident({
-                    ...incident,
-                    objective: event.target.value
-                  })
-                }
-              />
-            </label>
-
-            <label>
-              Personas evaluadas
-              <input
-                type="number"
-                min="0"
-                value={incident.evaluated}
-                onChange={(event) =>
-                  setIncident({
-                    ...incident,
-                    evaluated: Number(event.target.value)
-                  })
-                }
-              />
-            </label>
-
-            <label>
-              Lesionados
-              <input
-                type="number"
-                min="0"
-                value={incident.injured}
-                onChange={(event) =>
-                  setIncident({
-                    ...incident,
-                    injured: Number(event.target.value)
-                  })
-                }
-              />
-            </label>
-
-            <label>
-              Trasladados
-              <input
-                type="number"
-                min="0"
-                value={incident.transferred}
-                onChange={(event) =>
-                  setIncident({
-                    ...incident,
-                    transferred: Number(event.target.value)
-                  })
-                }
-              />
-            </label>
-
-            <label>
-              Aislados
-              <input
-                type="number"
-                min="0"
-                value={incident.isolated}
-                onChange={(event) =>
-                  setIncident({
-                    ...incident,
-                    isolated: Number(event.target.value)
-                  })
-                }
-              />
-            </label>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              setEditingIncident(false);
-              addLog(
-                "Datos generales del incidente actualizados."
-              );
-            }}
-          >
-            <Check size={17} />
-            Guardar cambios
-          </button>
-        </Modal>
-      )}
-
-      {resourceModal && (
-        <Modal
-          title="Agregar recurso"
-          onClose={() => setResourceModal(false)}
-        >
-          <form
-            className="form-grid"
-            onSubmit={(event) => {
-              event.preventDefault();
-              addResource(event.currentTarget);
-            }}
-          >
-            <label>
-              Código
-              <input name="code" required />
-            </label>
-
-            <label>
-              Nombre
-              <input name="name" required />
-            </label>
-
-            <label>
-              Tipo
-              <select name="type" defaultValue="Vehículo">
-                <option value="Vehículo">Vehículo</option>
-                <option value="Personal">Personal</option>
-                <option value="Equipo">Equipo</option>
-                <option value="Comunicaciones">
-                  Comunicaciones
-                </option>
-                <option value="Insumo">Insumo</option>
-              </select>
-            </label>
-
-            <label>
-              Cantidad
-              <input
-                name="quantity"
-                type="number"
-                min="1"
-                defaultValue="1"
-              />
-            </label>
-
-            <label>
-              Responsable
-              <input name="responsible" />
-            </label>
-
-            <label>
-              Ubicación
-              <input name="location" />
-            </label>
-
-            <label className="wide">
-              Misión o asignación
-              <input name="assignment" />
-            </label>
-
-            <button type="submit">
-              <Plus size={17} />
-              Agregar
-            </button>
-          </form>
-        </Modal>
-      )}
-
-      {taskModal && (
-        <Modal
-          title="Nueva tarea"
-          onClose={() => setTaskModal(false)}
-        >
-          <form
-            className="form-grid"
-            onSubmit={(event) => {
-              event.preventDefault();
-              addTask(event.currentTarget);
-            }}
-          >
-            <label className="wide">
-              Objetivo
-              <input name="objective" required />
-            </label>
-
-            <label className="wide">
-              Acción concreta
-              <input name="action" required />
-            </label>
-
-            <label>
-              Responsable
-              <input name="responsible" required />
-            </label>
-
-            <label>
-              Prioridad
-              <select name="priority" defaultValue="Media">
-                <option value="Alta">Alta</option>
-                <option value="Media">Media</option>
-                <option value="Baja">Baja</option>
-              </select>
-            </label>
-
-            <label>
-              Plazo
-              <input name="deadline" type="datetime-local" />
-            </label>
-
-            <button type="submit">
-              <Plus size={17} />
-              Crear tarea
-            </button>
-          </form>
-        </Modal>
-      )}
+      {resourceModal && <ResourceModal close={() => setResourceModal(false)} onSubmit={(resource) => {
+        setData(current => ({ ...current, resources: [...current.resources, resource] }));
+        addTimeline(`Se incorpora recurso ${resource.code} · ${resource.name}.`, "Logística", "Operador");
+        setResourceModal(false);
+      }} />}
+      {patientModal && <PatientModal close={() => setPatientModal(false)} onSubmit={(patient) => {
+        setData(current => ({ ...current, patients: [...current.patients, patient] }));
+        addTimeline(`Se registra paciente ${patient.name} con condición ${patient.condition}.`, "Salud", "Equipo clínico");
+        setPatientModal(false);
+      }} />}
+      {taskModal && <TaskModal close={() => setTaskModal(false)} onSubmit={(task) => {
+        setData(current => ({ ...current, tasks: [...current.tasks, task] }));
+        addTimeline(`Nueva tarea asignada a ${task.responsible}.`, "Decisión", data.incident.commander);
+        setTaskModal(false);
+      }} />}
+      {timelineModal && <TimelineModal close={() => setTimelineModal(false)} onSubmit={(entry) => {
+        setData(current => ({ ...current, timeline: [...current.timeline, entry] }));
+        setTimelineModal(false);
+      }} />}
     </div>
   );
 }
 
-type ModalProps = {
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-};
+function NavButton({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: ReactNode; label: string }) {
+  return <button className={active ? "active" : ""} onClick={onClick}>{icon}<span>{label}</span></button>;
+}
 
-function Modal({
-  title,
-  onClose,
-  children
-}: ModalProps) {
-  return (
-    <div
-      className="modal-bg"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
-          onClose();
-        }
-      }}
-    >
-      <div
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-      >
-        <button
-          type="button"
-          className="close"
-          onClick={onClose}
-          aria-label="Cerrar ventana"
-        >
-          <X />
-        </button>
+function Dashboard({ data, summary, now, setTab }: { data: AppData; summary: { activeResources: number; availableResources: number; transfers: number; deceased: number; openTasks: number }; now: Date; setTab: (tab: Tab) => void }) {
+  const incident = data.incident;
+  return <main className="page dashboard">
+    <section className={`incident-banner level-${slug(incident.level)}`}>
+      <div><span className="eyebrow">INCIDENTE ACTIVO</span><h1>{incident.name}</h1><p>{incident.type} · {incident.location}</p></div>
+      <div className="incident-command"><span>A cargo</span><strong>{incident.commander}</strong><small>Subrogante: {incident.deputy}</small></div>
+      <div className="incident-duration"><span>Tiempo transcurrido</span><strong>{elapsedLabel(incident.startedAt, now)}</strong><small>Inicio {new Date(incident.startedAt).toLocaleString("es-CL")}</small></div>
+      <div className="incident-level"><span>Gravedad</span><strong>{incident.level}</strong><small>{incident.status}</small></div>
+    </section>
 
-        <h2>{title}</h2>
-        {children}
-      </div>
-    </div>
-  );
+    <section className="metrics-grid">
+      <Metric icon={<Truck/>} label="Recursos activos" value={summary.activeResources} note={`${summary.availableResources} disponibles`} />
+      <Metric icon={<UsersRound/>} label="Personas registradas" value={data.patients.length} note={`${summary.transfers} trasladadas/hospitalizadas`} />
+      <Metric icon={<AlertTriangle/>} label="Fallecidos" value={summary.deceased} note="Consolidado operacional" danger={summary.deceased > 0} />
+      <Metric icon={<CheckCircle2/>} label="Tareas abiertas" value={summary.openTasks} note={`${data.tasks.filter(t => t.status === "Cumplida").length} cumplidas`} />
+    </section>
+
+    <section className="dashboard-grid">
+      <article className="panel"><div className="panel-head"><h2><Activity/>Situación actual</h2><button onClick={() => setTab("incidente")}>Editar</button></div><p className="lead">{incident.situation}</p><div className="info-block"><strong>Riesgos principales</strong><p>{incident.risks}</p></div><div className="info-block"><strong>Servicios críticos</strong><p>{incident.criticalServices}</p></div></article>
+      <article className="panel"><div className="panel-head"><h2><BarChart3/>Consolidado clínico</h2><button onClick={() => setTab("pacientes")}>Ver listado</button></div><ConditionBars patients={data.patients}/></article>
+      <article className="panel wide"><div className="panel-head"><h2><Truck/>Estado de recursos</h2><button onClick={() => setTab("recursos")}>Administrar</button></div><div className="resource-summary">{resourceStatuses.map(status => <div className={`summary-status status-${slug(status)}`} key={status}><span>{status}</span><strong>{data.resources.filter(r => r.status === status).reduce((n, r) => n + r.quantity, 0)}</strong></div>)}</div></article>
+      <article className="panel wide"><div className="panel-head"><h2><BookOpenText/>Últimos eventos</h2><button onClick={() => setTab("timeline")}>Abrir línea de tiempo</button></div><div className="mini-timeline">{[...data.timeline].reverse().slice(0, 5).map(entry => <div key={entry.id}><time>{new Date(entry.createdAt).toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })}</time><span className={`category category-${slug(entry.category)}`}>{entry.category}</span><p>{entry.description}</p></div>)}</div></article>
+    </section>
+  </main>;
+}
+
+function Metric({ icon, label, value, note, danger = false }: { icon: ReactNode; label: string; value: number; note: string; danger?: boolean }) {
+  return <article className={`metric ${danger ? "danger" : ""}`}><div>{icon}</div><span>{label}</span><strong>{value}</strong><small>{note}</small></article>;
+}
+
+function ConditionBars({ patients }: { patients: Patient[] }) {
+  if (!patients.length) return <div className="empty-state"><HeartPulse/><p>No hay pacientes registrados.</p></div>;
+  const max = Math.max(1, ...patientConditions.map(c => patients.filter(p => p.condition === c).length));
+  return <div className="condition-bars">{patientConditions.map(condition => { const count = patients.filter(p => p.condition === condition).length; return <div key={condition}><span>{condition}</span><div><i style={{ width: `${(count / max) * 100}%` }}/></div><strong>{count}</strong></div>; })}</div>;
+}
+
+function IncidentPanel({ data, setData, setTaskModal }: { data: AppData; setData: React.Dispatch<React.SetStateAction<AppData>>; setTaskModal: (value: boolean) => void }) {
+  const incident = data.incident;
+  const update = (key: keyof typeof incident, value: string) => setData(current => ({ ...current, incident: { ...current.incident, [key]: value } }));
+  return <main className="page"><section className="page-title"><div><span className="eyebrow">COMANDO</span><h1>Gestión del incidente</h1><p>Identificación, objetivos, situación y plan de acción.</p></div><button onClick={() => setTaskModal(true)}><Plus/>Nueva tarea</button></section>
+    <section className="two-columns"><article className="panel form-panel"><h2>Datos generales</h2><div className="form-grid"><label>Nombre<input value={incident.name} onChange={e => update("name", e.target.value)}/></label><label>Tipo<input value={incident.type} onChange={e => update("type", e.target.value)}/></label><label>Ubicación<input value={incident.location} onChange={e => update("location", e.target.value)}/></label><label>Inicio<input type="datetime-local" value={incident.startedAt} onChange={e => update("startedAt", e.target.value)}/></label><label>Comandante<input value={incident.commander} onChange={e => update("commander", e.target.value)}/></label><label>Subrogante<input value={incident.deputy} onChange={e => update("deputy", e.target.value)}/></label><label>Nivel<select value={incident.level} onChange={e => update("level", e.target.value)}><option>VERDE</option><option>AMARILLO</option><option>ROJO</option></select></label><label>Estado<select value={incident.status} onChange={e => update("status", e.target.value)}><option>Activo</option><option>En monitoreo</option><option>Cerrado</option></select></label></div></article>
+      <article className="panel form-panel"><h2>Situación operativa</h2><label>Objetivo general<textarea value={incident.objective} onChange={e => update("objective", e.target.value)}/></label><label>Situación actual<textarea value={incident.situation} onChange={e => update("situation", e.target.value)}/></label><label>Riesgos<textarea value={incident.risks} onChange={e => update("risks", e.target.value)}/></label><label>Servicios críticos<textarea value={incident.criticalServices} onChange={e => update("criticalServices", e.target.value)}/></label></article></section>
+    <section className="panel"><div className="panel-head"><h2>Plan de acción</h2><button onClick={() => setTaskModal(true)}><Plus/>Agregar</button></div><div className="task-list">{data.tasks.map(task => <div className={`task priority-${slug(task.priority)}`} key={task.id}><div><strong>{task.objective}</strong><p>{task.action}</p><small>{task.responsible} · {task.deadline ? new Date(task.deadline).toLocaleString("es-CL") : "Sin plazo"}</small></div><select value={task.status} onChange={e => setData(current => ({ ...current, tasks: current.tasks.map(item => item.id === task.id ? { ...item, status: e.target.value as Task["status"] } : item) }))}><option>Pendiente</option><option>En curso</option><option>Cumplida</option></select></div>)}</div></section>
+  </main>;
+}
+
+function ResourcesPanel({ data, setData, changeStatus, openModal }: { data: AppData; setData: React.Dispatch<React.SetStateAction<AppData>>; changeStatus: (resource: Resource, status: ResourceStatus) => void; openModal: () => void }) {
+  return <main className="page"><section className="page-title"><div><span className="eyebrow">LOGÍSTICA Y OPERACIONES</span><h1>Recursos y personal</h1><p>Personal, vehículos, equipos, comunicaciones e insumos precargados.</p></div><button onClick={openModal}><Plus/>Agregar recurso</button></section>
+    <section className="resource-board">{data.resources.map(resource => <article className={`resource-card status-${slug(resource.status)}`} key={resource.id}><div className="resource-top"><span className="resource-code">{resource.code}</span><span className="resource-status">{resource.status}</span></div><h3>{resource.name}</h3><p className="role">{resource.role}</p><dl><div><dt>Responsable</dt><dd>{resource.responsible}</dd></div><div><dt>Ubicación</dt><dd>{resource.location}</dd></div><div><dt>Asignación</dt><dd>{resource.assignment}</dd></div><div><dt>Cantidad</dt><dd>{resource.quantity}</dd></div></dl><div className="resource-actions"><select value={resource.status} onChange={e => changeStatus(resource, e.target.value as ResourceStatus)}>{resourceStatuses.map(status => <option key={status}>{status}</option>)}</select><button className="danger-icon" onClick={() => setData(current => ({ ...current, resources: current.resources.filter(item => item.id !== resource.id) }))}><Trash2/></button></div></article>)}</section>
+  </main>;
+}
+
+function PatientsPanel({ data, setData, changeCondition, openModal }: { data: AppData; setData: React.Dispatch<React.SetStateAction<AppData>>; changeCondition: (patient: Patient, condition: PatientCondition) => void; openModal: () => void }) {
+  return <main className="page"><section className="page-title"><div><span className="eyebrow">SALUD</span><h1>Registro de pacientes</h1><p>Listado operacional para consolidación, seguimiento y reporte.</p></div><button onClick={openModal}><Plus/>Agregar paciente</button></section>
+    <section className="patient-summary">{patientConditions.map(condition => <div className={`condition-${slug(condition)}`} key={condition}><span>{condition}</span><strong>{data.patients.filter(p => p.condition === condition).length}</strong></div>)}</section>
+    <section className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>Nombre</th><th>RUT</th><th>Sexo</th><th>Ciclo vital</th><th>Condición</th><th>Destino</th><th>Observaciones</th><th></th></tr></thead><tbody>{data.patients.map(patient => <tr key={patient.id}><td><strong>{patient.name}</strong></td><td>{patient.rut}</td><td>{patient.sex}</td><td>{patient.lifeCycle}</td><td><select className={`patient-select condition-${slug(patient.condition)}`} value={patient.condition} onChange={e => changeCondition(patient, e.target.value as PatientCondition)}>{patientConditions.map(condition => <option key={condition}>{condition}</option>)}</select></td><td>{patient.destination || "—"}</td><td>{patient.observations || "—"}</td><td><button className="danger-icon" onClick={() => setData(current => ({ ...current, patients: current.patients.filter(item => item.id !== patient.id) }))}><Trash2/></button></td></tr>)}{!data.patients.length && <tr><td colSpan={8}><div className="empty-state"><UsersRound/><p>No hay pacientes registrados.</p></div></td></tr>}</tbody></table></div></section>
+  </main>;
+}
+
+function TimelinePanel({ data, openModal }: { data: AppData; openModal: () => void }) {
+  return <main className="page"><section className="page-title"><div><span className="eyebrow">BITÁCORA</span><h1>Línea de tiempo operacional</h1><p>Registro cronológico de hechos, decisiones, comunicaciones y acciones.</p></div><button onClick={openModal}><Plus/>Registrar evento</button></section><section className="timeline-page">{[...data.timeline].reverse().map(entry => <article key={entry.id}><div className="timeline-dot"/><time>{new Date(entry.createdAt).toLocaleString("es-CL")}</time><span className={`category category-${slug(entry.category)}`}>{entry.category}</span><h3>{entry.description}</h3><p>Registrado por: {entry.author}</p></article>)}</section></main>;
+}
+
+function ReportPanel({ data, summary, now }: { data: AppData; summary: { activeResources: number; availableResources: number; transfers: number; deceased: number; openTasks: number }; now: Date }) {
+  return <main className="page report-page"><section className="page-title no-print"><div><span className="eyebrow">REPORTE</span><h1>SITREP consolidado</h1><p>Vista preparada para impresión o guardado como PDF.</p></div><button onClick={() => window.print()}><FileText/>Imprimir / Guardar PDF</button></section><article className="sitrep"><header><img src="/logo-ugred.jpg"/><div><span>DEPARTAMENTO DE SALUD · SAN JOSÉ DE MAIPO</span><h1>SITREP · {data.incident.name}</h1><p>Emitido {now.toLocaleString("es-CL")}</p></div></header><section><h2>1. Identificación</h2><div className="report-grid"><p><strong>Tipo:</strong> {data.incident.type}</p><p><strong>Ubicación:</strong> {data.incident.location}</p><p><strong>Nivel:</strong> {data.incident.level}</p><p><strong>Estado:</strong> {data.incident.status}</p><p><strong>Comandante:</strong> {data.incident.commander}</p><p><strong>Inicio:</strong> {new Date(data.incident.startedAt).toLocaleString("es-CL")}</p></div></section><section><h2>2. Situación</h2><p>{data.incident.situation}</p><h3>Riesgos</h3><p>{data.incident.risks}</p><h3>Servicios críticos</h3><p>{data.incident.criticalServices}</p></section><section><h2>3. Consolidado</h2><p>Pacientes registrados: {data.patients.length} · Trasladados/hospitalizados: {summary.transfers} · Fallecidos: {summary.deceased} · Recursos activos: {summary.activeResources} · Recursos disponibles: {summary.availableResources}.</p></section><section><h2>4. Pacientes</h2><table><thead><tr><th>Nombre</th><th>RUT</th><th>Sexo</th><th>Ciclo vital</th><th>Condición</th><th>Destino</th></tr></thead><tbody>{data.patients.map(p => <tr key={p.id}><td>{p.name}</td><td>{p.rut}</td><td>{p.sex}</td><td>{p.lifeCycle}</td><td>{p.condition}</td><td>{p.destination}</td></tr>)}</tbody></table></section><section><h2>5. Recursos desplegados</h2><ul>{data.resources.filter(r => ["Asignado", "En tránsito", "En operación"].includes(r.status)).map(r => <li key={r.id}>{r.code} · {r.name} · {r.responsible} · {r.status} · {r.assignment}</li>)}</ul></section><section><h2>6. Plan de acción</h2><ul>{data.tasks.map(t => <li key={t.id}>{t.objective} — {t.responsible} — {t.status}</li>)}</ul></section><section><h2>7. Eventos recientes</h2><ul>{data.timeline.slice(-12).map(e => <li key={e.id}>{new Date(e.createdAt).toLocaleString("es-CL")} · {e.category} · {e.description}</li>)}</ul></section></article></main>;
+}
+
+function Modal({ title, close, children }: { title: string; close: () => void; children: ReactNode }) { return <div className="modal-bg" onMouseDown={e => e.target === e.currentTarget && close()}><div className="modal"><button className="close" onClick={close}><X/></button><h2>{title}</h2>{children}</div></div>; }
+
+function ResourceModal({ close, onSubmit }: { close: () => void; onSubmit: (resource: Resource) => void }) {
+  function submit(e: FormEvent<HTMLFormElement>) { e.preventDefault(); const fd = new FormData(e.currentTarget); onSubmit({ id: crypto.randomUUID(), code: String(fd.get("code")), name: String(fd.get("name")), type: String(fd.get("type")) as ResourceType, role: String(fd.get("role")), responsible: String(fd.get("responsible")), location: String(fd.get("location")), assignment: String(fd.get("assignment")), quantity: Number(fd.get("quantity") || 1), status: "Disponible", updatedAt: new Date().toISOString() }); }
+  return <Modal title="Agregar recurso o personal" close={close}><form className="form-grid" onSubmit={submit}><label>Código<input name="code" required/></label><label>Nombre<input name="name" required/></label><label>Tipo<select name="type"><option>Personal</option><option>Vehículo</option><option>Equipo</option><option>Comunicaciones</option><option>Insumo</option></select></label><label>Cantidad<input name="quantity" type="number" min="1" defaultValue="1"/></label><label>Rol<input name="role" required placeholder="Ej. Operaciones clínicas"/></label><label>Responsable<input name="responsible" required/></label><label>Ubicación<input name="location"/></label><label>Asignación<input name="assignment"/></label><button type="submit"><Plus/>Agregar</button></form></Modal>;
+}
+
+function PatientModal({ close, onSubmit }: { close: () => void; onSubmit: (patient: Patient) => void }) {
+  function submit(e: FormEvent<HTMLFormElement>) { e.preventDefault(); const fd = new FormData(e.currentTarget); onSubmit({ id: crypto.randomUUID(), name: String(fd.get("name")), rut: String(fd.get("rut")), sex: String(fd.get("sex")) as Patient["sex"], lifeCycle: String(fd.get("lifeCycle")) as Patient["lifeCycle"], condition: String(fd.get("condition")) as PatientCondition, destination: String(fd.get("destination") || ""), observations: String(fd.get("observations") || ""), updatedAt: new Date().toISOString() }); }
+  return <Modal title="Registrar paciente" close={close}><form className="form-grid" onSubmit={submit}><label className="wide">Nombre completo<input name="name" required/></label><label>RUT<input name="rut" required placeholder="12.345.678-9"/></label><label>Sexo<select name="sex"><option>Femenino</option><option>Masculino</option><option>Intersex</option><option>No informado</option></select></label><label>Ciclo vital<select name="lifeCycle"><option>Infancia</option><option>Adolescencia</option><option>Adulto</option><option>Persona mayor</option><option>Gestante</option><option>No informado</option></select></label><label>Condición<select name="condition">{patientConditions.map(c => <option key={c}>{c}</option>)}</select></label><label className="wide">Destino<input name="destination" placeholder="Hospital, posta o lugar de derivación"/></label><label className="wide">Observaciones<textarea name="observations"/></label><button type="submit"><Plus/>Registrar</button></form></Modal>;
+}
+
+function TaskModal({ close, onSubmit }: { close: () => void; onSubmit: (task: Task) => void }) {
+  function submit(e: FormEvent<HTMLFormElement>) { e.preventDefault(); const fd = new FormData(e.currentTarget); onSubmit({ id: crypto.randomUUID(), objective: String(fd.get("objective")), action: String(fd.get("action")), responsible: String(fd.get("responsible")), priority: String(fd.get("priority")) as Task["priority"], status: "Pendiente", deadline: String(fd.get("deadline") || "") }); }
+  return <Modal title="Nueva tarea" close={close}><form className="form-grid" onSubmit={submit}><label className="wide">Objetivo<input name="objective" required/></label><label className="wide">Acción concreta<input name="action" required/></label><label>Responsable<input name="responsible" required/></label><label>Prioridad<select name="priority"><option>Alta</option><option>Media</option><option>Baja</option></select></label><label>Plazo<input name="deadline" type="datetime-local"/></label><button type="submit"><Plus/>Crear tarea</button></form></Modal>;
+}
+
+function TimelineModal({ close, onSubmit }: { close: () => void; onSubmit: (entry: TimelineEntry) => void }) {
+  function submit(e: FormEvent<HTMLFormElement>) { e.preventDefault(); const fd = new FormData(e.currentTarget); onSubmit({ id: crypto.randomUUID(), createdAt: String(fd.get("createdAt")) ? new Date(String(fd.get("createdAt"))).toISOString() : new Date().toISOString(), category: String(fd.get("category")) as TimelineEntry["category"], description: String(fd.get("description")), author: String(fd.get("author")) }); }
+  return <Modal title="Registrar evento operacional" close={close}><form className="form-grid" onSubmit={submit}><label>Fecha y hora<input name="createdAt" type="datetime-local" defaultValue={new Date().toISOString().slice(0,16)}/></label><label>Categoría<select name="category"><option>Activación</option><option>Operaciones</option><option>Salud</option><option>Logística</option><option>Comunicaciones</option><option>Decisión</option></select></label><label className="wide">Descripción<textarea name="description" required/></label><label>Registrado por<input name="author" required defaultValue="Operador"/></label><button type="submit"><Plus/>Registrar evento</button></form></Modal>;
 }
 
 export default App;
