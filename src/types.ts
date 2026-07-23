@@ -87,7 +87,7 @@ export interface Patient {
   name: string;
   rut: string;
   sex: PatientSex;
-  lifecycle: LifeCycle;
+  lifeCycle: LifeCycle;
   condition: PatientCondition;
   destination: string;
   observations: string;
