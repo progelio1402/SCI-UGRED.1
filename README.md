@@ -1,37 +1,26 @@
-# SCI UGRED San José de Maipo — versión funcional
+# SCI UGRED Profesional v2
 
-Aplicación web React/Vite para gestión de incidentes de la UGRED del Departamento de Salud de San José de Maipo.
+Tablero digital de comando de incidentes para UGRED San José de Maipo.
 
-## Funciones incluidas
+## Incluye
+- Dashboard consolidado con hora actual y duración del incidente.
+- Gestión del incidente, comando y plan de acción.
+- Recursos y personal precargados con roles.
+- Tarjetas de recursos coloreadas según estado.
+- Registro de pacientes: sexo, ciclo vital, nombre, RUT, condición, destino y observaciones.
+- Línea de tiempo operacional.
+- SITREP imprimible / exportable a PDF.
+- Guardado local y sincronización opcional con Supabase.
 
-- Edición del incidente activo.
-- Nivel de alerta y estado operativo.
-- Registro de situación, riesgos y servicios críticos.
-- Gestión de tareas y responsables.
-- Catálogo y despliegue de recursos.
-- Bitácora cronológica.
-- Reporte SITREP imprimible.
-- Guardado local automático.
-- Sincronización opcional con Supabase mediante `app_state`.
-- Identidad visual UGRED incorporada.
-
-## Variables de entorno
-
-```
-VITE_SUPABASE_URL=https://tu-proyecto.supabase.co
-VITE_SUPABASE_ANON_KEY=tu_clave_anon
-```
-
-## Desarrollo local
-
-```bash
-npm install
-npm run dev
-```
+## Instalación
+1. `npm install`
+2. Copiar `.env.example` como `.env` y completar credenciales para uso local.
+3. `npm run dev`
 
 ## Netlify
-
 - Build command: `npm run build`
 - Publish directory: `dist`
+- Variables: `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY`
 
-Después de reemplazar los archivos en GitHub, Netlify desplegará automáticamente.
+## Seguridad
+La política SQL incluida permite acceso público para pruebas. Antes de registrar información real o sensible, implementar autenticación y políticas RLS por usuario/rol.
